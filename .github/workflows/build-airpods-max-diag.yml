@@ -28,7 +28,7 @@ jobs:
           APP="build/AirPodsMaxDiag.app"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           clang -fobjc-arc -mmacosx-version-min=10.13 -arch x86_64 \
-            -framework AppKit -framework Foundation -framework IOBluetooth \
+            -framework AppKit -framework Foundation -framework IOBluetooth -framework IOKit \
             Sources/main.m Sources/APDDiagnostics.m Sources/APDMainController.m \
             -o "$APP/Contents/MacOS/AirPodsMaxDiag" 2>&1 | tee clang.log
           cp Sources/Info.plist "$APP/Contents/Info.plist"
