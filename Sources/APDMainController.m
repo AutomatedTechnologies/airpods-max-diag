@@ -11,6 +11,7 @@
 #import "APDDiagnostics.h"
 #import <IOBluetooth/IOBluetooth.h>
 #import <IOKit/IOKitLib.h>
+#import <IOKit/IOCFPlugIn.h>
 #import <IOKit/usb/IOUSBLib.h>
 
 // Latest firmware for AirPods Max (Lightning), per Apple Support
@@ -377,7 +378,7 @@ static NSString * const kAppleFirmwarePage = @"https://support.apple.com/en-us/1
         HRESULT hr = (*plugin)->QueryInterface(plugin,
             CFUUIDGetUUIDBytes(kIOUSBDeviceInterfaceID), (LPVOID *)&dev);
         (*plugin)->Release(plugin);
-        if (hr != S_OK || !dev) { result = kIOReturnNoInterface; break; }
+        if (hr != S_OK || !dev) { result = kIOReturnError; break; }
         kr = (*dev)->USBDeviceOpen(dev);
         if (kr == KERN_SUCCESS) {
             result = (*dev)->USBDeviceReEnumerate(dev, 0);
