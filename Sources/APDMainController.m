@@ -3,12 +3,15 @@
 // Buttons: Run Diagnostics · Restart AirPods Max… · Factory Reset… ·
 //          Restart Services · Firmware Update… · Save Report
 //          Force Restart Connection… · Force Firmware Update…  (apd-test-2)
+//          Force USB Reset…  (apd-test-3: bus-level re-enumeration)
 // First launch presents the SDS-8 welcome sheet (animated mark + the
 // Academy startup sound from the library).
 
 #import "APDMainController.h"
 #import "APDDiagnostics.h"
 #import <IOBluetooth/IOBluetooth.h>
+#import <IOKit/IOKitLib.h>
+#import <IOKit/usb/IOUSBLib.h>
 
 // Latest firmware for AirPods Max (Lightning), per Apple Support
 // "About firmware updates for AirPods" (support.apple.com/en-us/106340),
@@ -108,16 +111,17 @@ static NSString * const kAppleFirmwarePage = @"https://support.apple.com/en-us/1
     save.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin;
     NSButton *forceConn = [self buttonWithTitle:@"Force Restart Connection…" action:@selector(forceRestartConnection:) x:16 width:196];
     NSButton *forceFw = [self buttonWithTitle:@"Force Firmware Update…" action:@selector(showForceFirmware:) x:220 width:176];
+    NSButton *forceUSB = [self buttonWithTitle:@"Force USB Reset…" action:@selector(forceUSBReset:) x:404 width:150];
     for (NSButton *b in @[run, restart, reset, services, firmware, save]) {
         CGRect f = b.frame; f.origin.y = y; b.frame = f;
         [root addSubview:b];
     }
-    for (NSButton *b in @[forceConn, forceFw]) {
+    for (NSButton *b in @[forceConn, forceFw, forceUSB]) {
         CGRect f = b.frame; f.origin.y = y - 38; b.frame = f;
         [root addSubview:b];
     }
     run.keyEquivalent = @"\r";
-    self.actionButtons = @[run, restart, reset, services, firmware, save, forceConn, forceFw];
+    self.actionButtons = @[run, restart, reset, services, firmware, save, forceConn, forceFw, forceUSB];
 
     // Report view
     NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(16, 16, 848, 600 - 212)];
@@ -338,6 +342,99 @@ static NSString * const kAppleFirmwarePage = @"https://support.apple.com/en-us/1
     [self.watchTimer invalidate]; self.watchTimer = nil;
     if (self.forceSheet) [self.window endSheet:self.forceSheet];
     self.forceSheet = nil;
+}
+
+// Force USB Reset: a bus-level reset (re-enumeration) issued to the
+// headphones over USB — the strongest command a host can send on the
+// wire. Two cycles, then the probes re-run so the result is measured,
+// not assumed. There is no deeper USB command in macOS, and Apple
+// provides no USB firmware restore for AirPods on any host.
+- (IOReturn)reenumerateAirPodsMax:(BOOL *)found {
+    *found = NO;
+    io_iterator_t iter;
+    kern_return_t kr = IOServiceGetMatchingServices(kIOMasterPortDefault,
+        IOServiceMatching("IOUSBDevice"), &iter);
+    if (kr != KERN_SUCCESS) return kr;
+    IOReturn result = kIOReturnNotFound;
+    io_service_t svc;
+    while ((svc = IOIteratorNext(iter))) {
+        CFTypeRef v = IORegistryEntryCreateCFProperty(svc, CFSTR("idVendor"), kCFAllocatorDefault, 0);
+        CFTypeRef p = IORegistryEntryCreateCFProperty(svc, CFSTR("idProduct"), kCFAllocatorDefault, 0);
+        BOOL match = v && p && CFGetTypeID(v) == CFNumberGetTypeID()
+            && [(__bridge NSNumber *)v intValue] == 0x05ac
+            && [(__bridge NSNumber *)p intValue] == 0x1109;
+        if (v) CFRelease(v);
+        if (p) CFRelease(p);
+        if (!match) { IOObjectRelease(svc); continue; }
+        *found = YES;
+        IOCFPlugInInterface **plugin = NULL;
+        SInt32 score = 0;
+        kr = IOCreatePlugInInterfaceForService(svc, kIOUSBDeviceUserClientTypeID,
+            kIOCFPlugInInterfaceID, &plugin, &score);
+        IOObjectRelease(svc);
+        if (kr != KERN_SUCCESS || !plugin) { result = kr; break; }
+        IOUSBDeviceInterface **dev = NULL;
+        HRESULT hr = (*plugin)->QueryInterface(plugin,
+            CFUUIDGetUUIDBytes(kIOUSBDeviceInterfaceID), (LPVOID *)&dev);
+        (*plugin)->Release(plugin);
+        if (hr != S_OK || !dev) { result = kIOReturnNoInterface; break; }
+        kr = (*dev)->USBDeviceOpen(dev);
+        if (kr == KERN_SUCCESS) {
+            result = (*dev)->USBDeviceReEnumerate(dev, 0);
+            (*dev)->USBDeviceClose(dev);
+        } else {
+            result = kr;
+        }
+        (*dev)->Release(dev);
+        break;
+    }
+    IOObjectRelease(iter);
+    return result;
+}
+
+- (void)forceUSBReset:(id)sender {
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"Force a USB bus reset of the AirPods Max?";
+    alert.informativeText = @"This sends a bus-level reset (re-enumeration) to the "
+        @"headphones over USB — the strongest reset a host can issue on the wire. "
+        @"The device drops off the bus and re-enumerates; two cycles run, then "
+        @"diagnostics re-check the bus so the result is measured. It cannot harm "
+        @"the headphones. Note: no USB firmware restore exists for AirPods on any "
+        @"host — this reset is the deepest USB action there is.";
+    [alert addButtonWithTitle:@"Force USB Reset"];
+    [alert addButtonWithTitle:@"Cancel"];
+    [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+        if (result != NSAlertFirstButtonReturn) return;
+        [self setButtonsEnabled:NO];
+        self.statusLabel.stringValue = @"Forcing USB reset — cycle 1 of 2…";
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSMutableString *log = [NSMutableString stringWithString:@"\n[Force USB Reset]\n"];
+            for (int cycle = 1; cycle <= 2; cycle++) {
+                BOOL found = NO;
+                IOReturn rc = [self reenumerateAirPodsMax:&found];
+                if (!found) {
+                    [log appendString:@"Cycle: device not found on the USB bus — connect the Lightning cable.\n"];
+                    break;
+                }
+                [log appendFormat:@"Cycle %d: USBDeviceReEnumerate returned 0x%x (%@).\n",
+                    cycle, rc, rc == KERN_SUCCESS ? @"reset accepted" : @"reset refused or failed"];
+                if (cycle == 1) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        self.statusLabel.stringValue = @"Forcing USB reset — cycle 2 of 2…";
+                    });
+                    [NSThread sleepForTimeInterval:3.0];
+                }
+            }
+            [self.diag runProbes];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.reportView.string = [(self.diag.reportText ?: @"") stringByAppendingString:log];
+                self.statusLabel.stringValue = self.diag.usbFound
+                    ? @"USB reset complete — the headphones re-enumerated on the bus. Re-check Bluetooth and audio in the report."
+                    : @"USB reset complete — the headphones did NOT re-enumerate. The USB path itself is now in question (cable, port, device).";
+                [self setButtonsEnabled:YES];
+            });
+        });
+    }];
 }
 
 // ------------------------------------------------------- guided restart/reset
