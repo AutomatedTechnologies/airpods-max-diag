@@ -17,6 +17,7 @@
 @property (nonatomic, readonly) BOOL wifiOn;
 
 @property (nonatomic, readonly, copy) NSString *firmwareVersion; // nil when not readable
+@property (nonatomic, readonly, copy) NSString *batterySummary;  // nil when the device reports no battery over USB
 @property (nonatomic, readonly, copy) NSString *reportText;
 @property (nonatomic, readonly, copy) NSString *statusLine;
 
