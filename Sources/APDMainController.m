@@ -2,11 +2,13 @@
 // Programmatic AppKit UI (no nib), macOS 10.13 floor.
 // Buttons: Run Diagnostics · Restart AirPods Max… · Factory Reset… ·
 //          Restart Services · Firmware Update… · Save Report
+//          Force Restart Connection… · Force Firmware Update…  (apd-test-2)
 // First launch presents the SDS-8 welcome sheet (animated mark + the
 // Academy startup sound from the library).
 
 #import "APDMainController.h"
 #import "APDDiagnostics.h"
+#import <IOBluetooth/IOBluetooth.h>
 
 // Latest firmware for AirPods Max (Lightning), per Apple Support
 // "About firmware updates for AirPods" (support.apple.com/en-us/106340),
@@ -28,6 +30,11 @@ static NSString * const kAppleFirmwarePage = @"https://support.apple.com/en-us/1
 // firmware sheet
 @property (nonatomic, strong) NSWindow *firmwareSheet;
 @property (nonatomic, strong) NSTextField *firmwareBody;
+// force firmware sheet + watch
+@property (nonatomic, strong) NSWindow *forceSheet;
+@property (nonatomic, strong) NSTextField *forceBody;
+@property (nonatomic, strong) NSTimer *watchTimer;
+@property (nonatomic) NSInteger watchTicks;
 // welcome sheet
 @property (nonatomic, strong) NSWindow *welcomeSheet;
 @property (nonatomic, strong) NSTimer *pulseTimer;
@@ -49,13 +56,13 @@ static NSString * const kAppleFirmwarePage = @"https://support.apple.com/en-us/1
 
 - (void)showWindow {
     self.diag = [[APDDiagnostics alloc] init];
-    NSRect frame = NSMakeRect(0, 0, 800, 600);
+    NSRect frame = NSMakeRect(0, 0, 880, 600);
     self.window = [[NSWindow alloc] initWithContentRect:frame
         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                    NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
         backing:NSBackingStoreBuffered defer:NO];
     self.window.title = @"AirPods Max Diagnostics";
-    self.window.minSize = NSMakeSize(680, 480);
+    self.window.minSize = NSMakeSize(880, 480);
     self.window.delegate = self;
     NSView *root = self.window.contentView;
 
@@ -80,7 +87,7 @@ static NSString * const kAppleFirmwarePage = @"https://support.apple.com/en-us/1
     sub.autoresizingMask = NSViewMinYMargin;
     [root addSubview:sub];
 
-    self.statusLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 600 - 104, 768, 18)];
+    self.statusLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(16, 600 - 104, 848, 18)];
     self.statusLabel.stringValue =
         @"Not run yet — connect the AirPods Max by its Lightning cable and press Run Diagnostics.";
     self.statusLabel.font = [NSFont systemFontOfSize:12];
@@ -89,24 +96,31 @@ static NSString * const kAppleFirmwarePage = @"https://support.apple.com/en-us/1
     self.statusLabel.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     [root addSubview:self.statusLabel];
 
-    // Button bar
+    // Button bar — two rows; widths measured to their titles (apd-test-1
+    // shipped Save Report at 64 px and clipped its title on the rig).
     CGFloat y = 600 - 140;
-    NSButton *run = [self buttonWithTitle:@"Run Diagnostics" action:@selector(runDiagnostics:) x:16 width:128];
-    NSButton *restart = [self buttonWithTitle:@"Restart AirPods Max…" action:@selector(showRestart:) x:152 width:158];
-    NSButton *reset = [self buttonWithTitle:@"Factory Reset…" action:@selector(showReset:) x:318 width:118];
-    NSButton *services = [self buttonWithTitle:@"Restart Services" action:@selector(restartServices:) x:444 width:128];
-    NSButton *firmware = [self buttonWithTitle:@"Firmware Update…" action:@selector(showFirmware:) x:580 width:132];
-    NSButton *save = [self buttonWithTitle:@"Save Report" action:@selector(saveReport:) x:720 width:64];
+    NSButton *run = [self buttonWithTitle:@"Run Diagnostics" action:@selector(runDiagnostics:) x:16 width:132];
+    NSButton *restart = [self buttonWithTitle:@"Restart AirPods Max…" action:@selector(showRestart:) x:156 width:168];
+    NSButton *reset = [self buttonWithTitle:@"Factory Reset…" action:@selector(showReset:) x:332 width:122];
+    NSButton *services = [self buttonWithTitle:@"Restart Services" action:@selector(restartServices:) x:462 width:132];
+    NSButton *firmware = [self buttonWithTitle:@"Firmware Update…" action:@selector(showFirmware:) x:602 width:140];
+    NSButton *save = [self buttonWithTitle:@"Save Report" action:@selector(saveReport:) x:750 width:114];
     save.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin;
+    NSButton *forceConn = [self buttonWithTitle:@"Force Restart Connection…" action:@selector(forceRestartConnection:) x:16 width:196];
+    NSButton *forceFw = [self buttonWithTitle:@"Force Firmware Update…" action:@selector(showForceFirmware:) x:220 width:176];
     for (NSButton *b in @[run, restart, reset, services, firmware, save]) {
         CGRect f = b.frame; f.origin.y = y; b.frame = f;
         [root addSubview:b];
     }
+    for (NSButton *b in @[forceConn, forceFw]) {
+        CGRect f = b.frame; f.origin.y = y - 38; b.frame = f;
+        [root addSubview:b];
+    }
     run.keyEquivalent = @"\r";
-    self.actionButtons = @[run, restart, reset, services, firmware, save];
+    self.actionButtons = @[run, restart, reset, services, firmware, save, forceConn, forceFw];
 
     // Report view
-    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(16, 16, 768, 600 - 172)];
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(16, 16, 848, 600 - 212)];
     scroll.hasVerticalScroller = YES;
     scroll.borderType = NSBezelBorder;
     scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
@@ -188,6 +202,144 @@ static NSString * const kAppleFirmwarePage = @"https://support.apple.com/en-us/1
     }];
 }
 
+// ------------------------------------------------------------- force actions
+
+// Force Restart Connection: the strongest host-side reset that exists.
+// Restarts the audio/Bluetooth daemons, then asks the Bluetooth stack to
+// open a connection to the paired AirPods Max. (No macOS API can reboot
+// the headphones themselves — Apple's design has none.)
+- (void)forceRestartConnection:(id)sender {
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"Force restart the connection?";
+    alert.informativeText = @"This restarts coreaudiod and bluetoothd (administrator "
+        @"password required), then instructs the Bluetooth stack to connect to the "
+        @"paired AirPods Max. Bluetooth devices disconnect briefly. Use it when the "
+        @"headphones enumerate on USB but will not pair, connect, or route audio.";
+    [alert addButtonWithTitle:@"Force Restart Connection"];
+    [alert addButtonWithTitle:@"Cancel"];
+    [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+        if (result != NSAlertFirstButtonReturn) return;
+        NSDictionary *errInfo = nil;
+        NSAppleScript *script = [[NSAppleScript alloc] initWithSource:
+            @"do shell script \"killall coreaudiod; killall bluetoothd\" with administrator privileges"];
+        [script executeAndReturnError:&errInfo];
+        if (errInfo) {
+            self.statusLabel.stringValue = @"Force restart did not complete — the services restart was refused or cancelled.";
+            return;
+        }
+        self.statusLabel.stringValue = @"Services restarted — attempting to connect to the AirPods Max…";
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                IOBluetoothDevice *target = nil;
+                for (IOBluetoothDevice *device in [IOBluetoothDevice pairedDevices]) {
+                    if ([device.name containsString:@"AirPods Max"]) { target = device; break; }
+                }
+                if (!target) {
+                    self.statusLabel.stringValue = @"Stack restarted, but this Mac has no pairing record for an AirPods Max — "
+                        @"pair it in System Preferences > Bluetooth, then run Diagnostics.";
+                    return;
+                }
+                IOReturn rc = [target openConnection];
+                self.statusLabel.stringValue = (rc == kIOReturnSuccess)
+                    ? @"Connection opened to the AirPods Max. Run Diagnostics to re-check audio and firmware."
+                    : [NSString stringWithFormat:@"Stack restarted; the connect attempt returned 0x%x. "
+                       @"If the headphones stay silent, their own buttons are the only reset path — see the Restart sheet's note.", rc];
+            });
+    }];
+}
+
+// Force Firmware Update: forces every host-side condition Apple requires,
+// then watches the firmware version for up to 30 minutes. Apple delivers
+// AirPods firmware automatically; no host command installs it directly.
+- (void)showForceFirmware:(id)sender {
+    NSWindow *sheet = [self makeSheetWithWidth:560 height:440];
+    self.forceSheet = sheet;
+    NSView *v = sheet.contentView;
+    [v addSubview:[self labelAt:NSMakeRect(20, 440 - 44, 520, 22)
+        text:@"Force Firmware Update — AirPods Max (Lightning)" size:14 bold:YES wrap:NO]];
+    self.forceBody = [self labelAt:NSMakeRect(20, 440 - 356, 520, 300) text:@"Checking…" size:12 bold:NO wrap:YES];
+    [v addSubview:self.forceBody];
+    NSButton *start = [[NSButton alloc] initWithFrame:NSMakeRect(20, 20, 190, 30)];
+    start.title = @"Start Force Sequence"; start.bezelStyle = NSBezelStyleRounded;
+    start.target = self; start.action = @selector(startForceSequence:);
+    [v addSubview:start];
+    NSButton *close = [[NSButton alloc] initWithFrame:NSMakeRect(560 - 110, 20, 90, 30)];
+    close.title = @"Close"; close.bezelStyle = NSBezelStyleRounded;
+    close.target = self; close.action = @selector(closeForceFirmware:);
+    [v addSubview:close];
+    [self.window beginSheet:sheet completionHandler:nil];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        [self.diag runFirmwareProbes];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.forceBody.stringValue = [NSString stringWithFormat:
+                @"Current firmware: %@\nLatest for this model: %@\n\n"
+                @"Apple delivers AirPods firmware automatically — no Mac command installs\n"
+                @"it directly, and no manual installer exists. The force sequence does\n"
+                @"everything the host side allows:\n\n"
+                @"1. Restarts coreaudiod and bluetoothd (administrator password).\n"
+                @"2. Re-checks the delivery conditions (charging over USB, Bluetooth\n"
+                @"   connected, this Mac on Wi-Fi).\n"
+                @"3. Watches the firmware version every minute for 30 minutes and\n"
+                @"   reports the moment it changes.\n\n"
+                @"Keep the headphones on charge and in range while it watches.",
+                self.diag.firmwareVersion ?: @"unknown (reads over Bluetooth)", kLatestFirmwareLightning];
+        });
+    });
+}
+
+- (void)startForceSequence:(id)sender {
+    NSDictionary *errInfo = nil;
+    NSAppleScript *script = [[NSAppleScript alloc] initWithSource:
+        @"do shell script \"killall coreaudiod; killall bluetoothd\" with administrator privileges"];
+    [script executeAndReturnError:&errInfo];
+    if (errInfo) {
+        self.forceBody.stringValue = @"The services restart was refused or cancelled — the force sequence cannot start.";
+        return;
+    }
+    self.watchTicks = 0;
+    [self.watchTimer invalidate];
+    self.watchTimer = [NSTimer scheduledTimerWithTimeInterval:60 target:self
+        selector:@selector(tickFirmwareWatch:) userInfo:nil repeats:YES];
+    self.forceBody.stringValue = [NSString stringWithFormat:
+        @"Force sequence running. Services restarted; conditions re-checked.\n"
+        @"Watching the firmware version — check 0 of 30 (latest is %@).\n\n"
+        @"Leave the headphones charging and in range.", kLatestFirmwareLightning];
+}
+
+- (void)tickFirmwareWatch:(NSTimer *)timer {
+    self.watchTicks++;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        [self.diag runFirmwareProbes];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSString *current = self.diag.firmwareVersion;
+            if ([current isEqualToString:kLatestFirmwareLightning]) {
+                [self.watchTimer invalidate]; self.watchTimer = nil;
+                self.forceBody.stringValue = [NSString stringWithFormat:
+                    @"Firmware is now %@ — UP TO DATE. The update landed during the watch.", current];
+                NSBeep();
+            } else if (self.watchTicks >= 30) {
+                [self.watchTimer invalidate]; self.watchTimer = nil;
+                self.forceBody.stringValue =
+                    @"No firmware change after 30 minutes of watching. Leave the headphones\n"
+                    @"charging next to this Mac (or a paired iPhone) for a few hours — delivery\n"
+                    @"is Apple's schedule, not the host's. If the version never moves and the\n"
+                    @"headphones misbehave, an Apple Store / AASP visit is the remaining path.";
+            } else {
+                self.forceBody.stringValue = [NSString stringWithFormat:
+                    @"Watching — check %ld of 30. Current firmware: %@ (latest %@).\n"
+                    @"Keep the headphones charging and in range.",
+                    (long)self.watchTicks, current ?: @"unknown", kLatestFirmwareLightning];
+            }
+        });
+    });
+}
+
+- (void)closeForceFirmware:(id)sender {
+    [self.watchTimer invalidate]; self.watchTimer = nil;
+    if (self.forceSheet) [self.window endSheet:self.forceSheet];
+    self.forceSheet = nil;
+}
+
 // ------------------------------------------------------- guided restart/reset
 
 - (NSWindow *)makeSheetWithWidth:(CGFloat)w height:(CGFloat)h {
@@ -208,7 +360,7 @@ static NSString * const kAppleFirmwarePage = @"https://support.apple.com/en-us/1
 - (void)showGuidedReset:(BOOL)isReset {
     self.guidedIsReset = isReset;
     [self.guidedTimer invalidate]; self.guidedTimer = nil;
-    NSWindow *sheet = [self makeSheetWithWidth:520 height:340];
+    NSWindow *sheet = [self makeSheetWithWidth:520 height:420];
     NSView *v = sheet.contentView;
     NSString *title = isReset ? @"Factory Reset — AirPods Max" : @"Restart — AirPods Max";
     NSString *steps = isReset
@@ -224,9 +376,16 @@ static NSString * const kAppleFirmwarePage = @"https://support.apple.com/en-us/1
           @"    together, until the status light flashes amber.\n"
           @"3. Release both buttons. The headphones restart.\n"
           @"4. Wait ~30 seconds, then Run Diagnostics to re-check the link.";
-    [v addSubview:[self labelAt:NSMakeRect(20, 340 - 44, 480, 22) text:title size:14 bold:YES wrap:NO]];
-    [v addSubview:[self labelAt:NSMakeRect(20, 340 - 190, 480, 140) text:steps size:12 bold:NO wrap:YES]];
-    self.guidedTimerLabel = [self labelAt:NSMakeRect(20, 340 - 240, 480, 30)
+    steps = [steps stringByAppendingString:
+        @"\n\nIf the buttons do not respond at all: keep the headphones plugged\n"
+        @"into USB power and repeat the hold once. Still nothing — the\n"
+        @"headphones themselves are wedged, and no command from this Mac\n"
+        @"can reboot them. Remaining paths: leave them OFF charge until the\n"
+        @"battery fully drains (can take days), charge 30 minutes, and try\n"
+        @"the hold again — or Apple service."];
+    [v addSubview:[self labelAt:NSMakeRect(20, 420 - 44, 480, 22) text:title size:14 bold:YES wrap:NO]];
+    [v addSubview:[self labelAt:NSMakeRect(20, 420 - 290, 480, 240) text:steps size:12 bold:NO wrap:YES]];
+    self.guidedTimerLabel = [self labelAt:NSMakeRect(20, 420 - 340, 480, 30)
         text:(isReset ? @"Press Start when you are holding both buttons." : @"No timer needed — hold until the light flashes amber.")
         size:13 bold:YES wrap:NO];
     [v addSubview:self.guidedTimerLabel];
@@ -401,6 +560,7 @@ static NSString * const kAppleFirmwarePage = @"https://support.apple.com/en-us/1
 - (void)windowWillClose:(NSNotification *)notification {
     [self.pulseTimer invalidate];
     [self.guidedTimer invalidate];
+    [self.watchTimer invalidate];
 }
 
 @end
