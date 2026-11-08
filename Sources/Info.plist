@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>AirPods Max Diagnostics</string>
+	<key>CFBundleDisplayName</key>
+	<string>AirPods Max Diagnostics</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.detroitautomationacademy.airpodsmaxdiag</string>
+	<key>CFBundleExecutable</key>
+	<string>AirPodsMaxDiag</string>
+	<key>CFBundleIconFile</key>
+	<string>AirPodsMaxDiag</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>apd-test-0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>10.13</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Detroit Automation Academy / Automated Technologies. AirPods Max is a trademark of Apple Inc.; this utility is not affiliated with or endorsed by Apple Inc.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>com.detroitautomationacademy.audit</key>
+	<dict>
+		<key>Disassembled</key>
+		<true/>
+		<key>Scanned</key>
+		<true/>
+		<key>Recompiled</key>
+		<true/>
+		<key>Authority</key>
+		<string>Detroit Automation Academy</string>
+		<key>Date</key>
+		<string>2026-11-08</string>
+	</dict>
+</dict>
+</plist>

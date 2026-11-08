@@ -1,0 +1,80 @@
+name: AirPods Max Diagnostics test build
+
+on:
+  push:
+    branches: [build-test]
+  workflow_dispatch:
+
+# The publish step creates a GitHub Release with GITHUB_TOKEN (Distro-line
+# precedent, 2026-11-07: default token needs contents: write declared).
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build app icon (iconutil, from the committed iconset)
+        run: |
+          iconutil -c icns Resources/AppIcon.iconset -o Resources/AirPodsMaxDiag.icns
+          ls -la Resources/AirPodsMaxDiag.icns
+
+      - name: Build app (clang, unsigned, x86_64, 10.13 floor)
+        run: |
+          set -o pipefail
+          APP="build/AirPodsMaxDiag.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          clang -fobjc-arc -mmacosx-version-min=10.13 -arch x86_64 \
+            -framework AppKit -framework Foundation \
+            Sources/main.m Sources/APDDiagnostics.m Sources/APDMainController.m \
+            -o "$APP/Contents/MacOS/AirPodsMaxDiag" 2>&1 | tee clang.log
+          cp Sources/Info.plist "$APP/Contents/Info.plist"
+          cp Resources/AirPodsMaxDiag.icns "$APP/Contents/Resources/"
+          cp Resources/startup-sound.wav "$APP/Contents/Resources/"
+          cp Resources/LICENSE-ACADEMY.txt "$APP/Contents/Resources/"
+          cp Resources/NOTICE.txt "$APP/Contents/Resources/"
+          echo "APPL????" > "$APP/Contents/PkgInfo"
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clang-log
+          path: clang.log
+
+      - name: Stamp build version and package app as zip
+        if: success()
+        run: |
+          APP="build/AirPodsMaxDiag.app"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion apd-test-${{ github.run_number }}" "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist"
+          file "$APP/Contents/MacOS/AirPodsMaxDiag"
+          ls -la "$APP/Contents/Resources/"
+          ditto -c -k --keepParent "$APP" AirPodsMaxDiag-test.zip
+          ls -la AirPodsMaxDiag-test.zip
+
+      - name: Upload test build zip (survival copy)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: airpods-max-diag-test-zip
+          path: AirPodsMaxDiag-test.zip
+
+      - name: Publish prerelease with test build
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BUILT=$(date -u '+%Y-%m-%d %H:%M UTC')
+          NOTES="Internal test build of AirPods Max Diagnostics, a Detroit Automation Academy utility for macOS High Sierra: diagnose a USB-connected, non-responsive AirPods Max (Lightning), with guided restart / factory reset, a services restart, and a firmware-update panel (latest Lightning firmware 6F25, Apple Support 106340). Publisher: Detroit Automation Academy. Unsigned test build — not gate-cleared, not yet verified on the High Sierra rig.
+
+          BUILD STAMP — Built: $BUILT · Build: apd-test-${{ github.run_number }} (CI run ${{ github.run_id }}) · Agent: Forge · Authorized: J. Spencer Smith, directive of 2026-11-08 (update utility with restart buttons + firmware update option; publish through Distro with full GUI)"
+          gh release create apd-test-${{ github.run_number }} AirPodsMaxDiag-test.zip \
+            --prerelease \
+            --title "AirPods Max Diagnostics test build ${{ github.run_number }}" \
+            --notes "$NOTES"
