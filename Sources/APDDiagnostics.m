@@ -53,6 +53,8 @@ static NSString *APDValueAfter(NSString *text, NSString *label) {
 @property (nonatomic, readwrite, copy) NSString *reportText;
 @property (nonatomic, readwrite, copy) NSString *statusLine;
 @property (nonatomic, copy) NSString *usbBlock, *ioBlock, *btBlock, *hostName;
+@property (nonatomic, readwrite, copy) NSString *batterySummary;
+@property (nonatomic, copy) NSString *batteryDetail;
 @end
 
 @implementation APDDiagnostics
@@ -77,6 +79,30 @@ static NSString *APDValueAfter(NSString *text, NSString *label) {
     }
     self.ioBlock = ctx;
     if (!self.usbFound && ctx.length > 0) self.usbFound = YES;
+
+    // Battery query over USB: scan the device node's registry properties
+    // for anything battery-shaped the unit will state on the wire.
+    NSMutableArray<NSString *> *battLines = [NSMutableArray array];
+    NSString *level = nil;
+    for (NSString *line in [ctx componentsSeparatedByString:@"\n"]) {
+        NSString *low = line.lowercaseString;
+        if ([low containsString:@"battery"] || [low containsString:@"charge"] ||
+            [low containsString:@"capacit"] || [low containsString:@"fuel"] ||
+            [low containsString:@"cyclecount"] || [low containsString:@"cycle count"]) {
+            NSString *t = [line stringByTrimmingCharactersInSet:
+                [NSCharacterSet whitespaceCharacterSet]];
+            if (t.length) [battLines addObject:t];
+            if (!level && ([low containsString:@"level"] || [low containsString:@"percent"] ||
+                           [low containsString:@"charge"])) {
+                NSRange eq = [t rangeOfString:@"="];
+                if (eq.location != NSNotFound && t.length > eq.location + 1)
+                    level = [[t substringFromIndex:eq.location + 1]
+                        stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            }
+        }
+    }
+    self.batteryDetail = battLines.count ? [battLines componentsJoinedByString:@"\n"] : nil;
+    self.batterySummary = level ?: (battLines.count ? @"reported (see report)" : nil);
 
     if (self.usbFound) {
         NSString *req = APDValueAfter(self.usbBlock, @"Current Required (mA):");
@@ -172,6 +198,18 @@ static NSString *APDValueAfter(NSString *text, NSString *label) {
     if (self.dfuPresent)
         [r appendString:@">> NOTE: an Apple device in DFU mode (0x1227) is present on this bus.\n"];
 
+    [r appendString:@"\n== 2b · BATTERY (queried over USB) ==\n"];
+    if (self.batteryDetail.length) {
+        [r appendFormat:@"%@\n", self.batteryDetail];
+        [r appendString:@">> The device states battery data over USB (above).\n"];
+    } else {
+        [r appendString:@"The device reports NO battery level, charge state, or capacity over USB.\n"];
+        [r appendString:@"   (AirPods expose battery only over a live Bluetooth link. On a unit that\n"];
+        [r appendString:@"    never pairs, a USB battery query returns nothing by design — test the cell\n"];
+        [r appendString:@"    by behaviour instead: charge for hours, then try the pairing hold while\n"];
+        [r appendString:@"    still plugged in. Advertising on the wire but not off it = battery fault.)\n"];
+    }
+
     [r appendString:@"\n== 3 · AUDIO LAYER (system_profiler SPAudioDataType) ==\n"];
     if (self.audioFound) {
         [r appendFormat:@"%@\n", audioBlock];
@@ -209,11 +247,12 @@ static NSString *APDValueAfter(NSString *text, NSString *label) {
 }
 
 - (NSString *)composeStatusLine {
-    return [NSString stringWithFormat:@"USB: %@ · Bluetooth: %@ · Audio: %@ · Firmware: %@",
+    return [NSString stringWithFormat:@"USB: %@ · Bluetooth: %@ · Audio: %@ · Firmware: %@ · Battery: %@",
         self.usbFound ? @"found" : @"not found",
         self.btConnected ? @"connected" : (self.btPaired ? @"paired, not connected" : @"not paired"),
         self.audioFound ? @"device present" : @"no device",
-        self.firmwareVersion ?: @"unknown"];
+        self.firmwareVersion ?: @"unknown",
+        self.batterySummary ?: @"not reported over USB"];
 }
 
 - (NSString *)verdictText {
