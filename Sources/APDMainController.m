@@ -48,6 +48,141 @@ static NSString * const kAppleFirmwarePage = @"https://support.apple.com/en-us/1
 
 @implementation APDMainController
 
+// ------------------------------------------------------------- main menu
+// apd-test-5 fix: apd-test-4 and earlier shipped with NO menu bar —
+// main.m runs NSApplication without a nib (Info.plist carries no
+// NSMainNibFile) and no code ever built a menu or called
+// -[NSApplication setMainMenu:], so the running app showed no menus
+// at all (owner report, 2026-11-10). The menu is constructed here,
+// in code, like the rest of this app's UI: app menu (About, Quit),
+// File (Save Report…, Close Window), Edit (standard first-responder
+// editing — the report NSTextView is selectable), Diagnostics (the
+// window's nine actions, same selectors as the buttons), Window,
+// Help. Menu items targeting the controller mirror their button's
+// enabled state via validateMenuItem:, so a probe run disables the
+// menu path exactly as it disables the buttons.
+
+- (NSMenuItem *)menuItemIn:(NSMenu *)menu title:(NSString *)title
+                    action:(SEL)action key:(NSString *)key target:(id)target {
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
+        action:action keyEquivalent:(key ?: @"")];
+    item.target = target;
+    [menu addItem:item];
+    return item;
+}
+
+- (void)installMainMenu {
+    NSString *appName = @"AirPods Max Diagnostics";
+    NSMenu *mainMenu = [[NSMenu alloc] initWithTitle:@"Main Menu"];
+
+    // App menu
+    NSMenuItem *appItem = [[NSMenuItem alloc] init];
+    [mainMenu addItem:appItem];
+    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:appName];
+    appItem.submenu = appMenu;
+    [self menuItemIn:appMenu title:[@"About " stringByAppendingString:appName]
+        action:@selector(orderFrontStandardAboutPanel:) key:nil target:nil];
+    [appMenu addItem:[NSMenuItem separatorItem]];
+    [self menuItemIn:appMenu title:[@"Hide " stringByAppendingString:appName]
+        action:@selector(hide:) key:@"h" target:nil];
+    NSMenuItem *hideOthers = [self menuItemIn:appMenu title:@"Hide Others"
+        action:@selector(hideOtherApplications:) key:@"h" target:nil];
+    hideOthers.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
+    [self menuItemIn:appMenu title:@"Show All"
+        action:@selector(unhideAllApplications:) key:nil target:nil];
+    [appMenu addItem:[NSMenuItem separatorItem]];
+    [self menuItemIn:appMenu title:[@"Quit " stringByAppendingString:appName]
+        action:@selector(terminate:) key:@"q" target:nil];
+
+    // File menu
+    NSMenuItem *fileItem = [[NSMenuItem alloc] init];
+    [mainMenu addItem:fileItem];
+    NSMenu *fileMenu = [[NSMenu alloc] initWithTitle:@"File"];
+    fileItem.submenu = fileMenu;
+    [self menuItemIn:fileMenu title:@"Save Report…"
+        action:@selector(saveReport:) key:@"s" target:self];
+    [fileMenu addItem:[NSMenuItem separatorItem]];
+    [self menuItemIn:fileMenu title:@"Close Window"
+        action:@selector(performClose:) key:@"w" target:nil];
+
+    // Edit menu — nil targets route through the first responder
+    // (the report NSTextView: copy / select-all work; the text is
+    // read-only, so cut/paste/delete validate off automatically).
+    NSMenuItem *editItem = [[NSMenuItem alloc] init];
+    [mainMenu addItem:editItem];
+    NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
+    editItem.submenu = editMenu;
+    [self menuItemIn:editMenu title:@"Undo" action:@selector(undo:) key:@"z" target:nil];
+    NSMenuItem *redo = [self menuItemIn:editMenu title:@"Redo"
+        action:@selector(redo:) key:@"Z" target:nil];
+    redo.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+    [editMenu addItem:[NSMenuItem separatorItem]];
+    [self menuItemIn:editMenu title:@"Cut" action:@selector(cut:) key:@"x" target:nil];
+    [self menuItemIn:editMenu title:@"Copy" action:@selector(copy:) key:@"c" target:nil];
+    [self menuItemIn:editMenu title:@"Paste" action:@selector(paste:) key:@"v" target:nil];
+    [self menuItemIn:editMenu title:@"Delete" action:@selector(delete:) key:nil target:nil];
+    [self menuItemIn:editMenu title:@"Select All" action:@selector(selectAll:) key:@"a" target:nil];
+
+    // Diagnostics menu — the window's actions, same selectors.
+    NSMenuItem *diagItem = [[NSMenuItem alloc] init];
+    [mainMenu addItem:diagItem];
+    NSMenu *diagMenu = [[NSMenu alloc] initWithTitle:@"Diagnostics"];
+    diagItem.submenu = diagMenu;
+    [self menuItemIn:diagMenu title:@"Run Diagnostics"
+        action:@selector(runDiagnostics:) key:@"r" target:self];
+    [diagMenu addItem:[NSMenuItem separatorItem]];
+    [self menuItemIn:diagMenu title:@"Restart AirPods Max…"
+        action:@selector(showRestart:) key:nil target:self];
+    [self menuItemIn:diagMenu title:@"Factory Reset…"
+        action:@selector(showReset:) key:nil target:self];
+    [diagMenu addItem:[NSMenuItem separatorItem]];
+    [self menuItemIn:diagMenu title:@"Restart Services"
+        action:@selector(restartServices:) key:nil target:self];
+    [self menuItemIn:diagMenu title:@"Firmware Update…"
+        action:@selector(showFirmware:) key:nil target:self];
+    [diagMenu addItem:[NSMenuItem separatorItem]];
+    [self menuItemIn:diagMenu title:@"Force Restart Connection…"
+        action:@selector(forceRestartConnection:) key:nil target:self];
+    [self menuItemIn:diagMenu title:@"Force Firmware Update…"
+        action:@selector(showForceFirmware:) key:nil target:self];
+    [self menuItemIn:diagMenu title:@"Force USB Reset…"
+        action:@selector(forceUSBReset:) key:nil target:self];
+
+    // Window menu
+    NSMenuItem *windowItem = [[NSMenuItem alloc] init];
+    [mainMenu addItem:windowItem];
+    NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
+    windowItem.submenu = windowMenu;
+    [self menuItemIn:windowMenu title:@"Minimize"
+        action:@selector(performMiniaturize:) key:@"m" target:nil];
+    [self menuItemIn:windowMenu title:@"Zoom"
+        action:@selector(performZoom:) key:nil target:nil];
+    [windowMenu addItem:[NSMenuItem separatorItem]];
+    [self menuItemIn:windowMenu title:@"Bring All to Front"
+        action:@selector(arrangeInFront:) key:nil target:nil];
+    NSApp.windowsMenu = windowMenu;
+
+    // Help menu
+    NSMenuItem *helpItem = [[NSMenuItem alloc] init];
+    [mainMenu addItem:helpItem];
+    NSMenu *helpMenu = [[NSMenu alloc] initWithTitle:@"Help"];
+    helpItem.submenu = helpMenu;
+    [self menuItemIn:helpMenu title:@"About Firmware Updates for AirPods (Apple Support)"
+        action:@selector(openFirmwarePage:) key:nil target:self];
+    NSApp.helpMenu = helpMenu;
+
+    [NSApp setMainMenu:mainMenu];
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+    if (item.target == self) {
+        for (NSButton *b in self.actionButtons) {
+            if (b.action == item.action) return b.enabled;
+        }
+    }
+    return YES;
+}
+
 - (NSButton *)buttonWithTitle:(NSString *)title action:(SEL)sel x:(CGFloat)x width:(CGFloat)w {
     NSButton *b = [[NSButton alloc] initWithFrame:NSMakeRect(x, 0, w, 28)];
     b.title = title;
@@ -59,6 +194,7 @@ static NSString * const kAppleFirmwarePage = @"https://support.apple.com/en-us/1
 }
 
 - (void)showWindow {
+    [self installMainMenu];
     self.diag = [[APDDiagnostics alloc] init];
     NSRect frame = NSMakeRect(0, 0, 880, 600);
     self.window = [[NSWindow alloc] initWithContentRect:frame
