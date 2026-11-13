@@ -39,5 +39,24 @@
 		<key>Date</key>
 		<string>2026-11-10</string>
 	</dict>
+	<key>com.detroitautomationacademy.conformance</key>
+	<dict>
+		<key>Authority</key>
+		<string>Detroit Automation Academy</string>
+		<key>Date</key>
+		<string>2026-11-13</string>
+		<key>Logo</key>
+		<true/>
+		<key>MenuBar</key>
+		<true/>
+		<key>NotificationIdentity</key>
+		<true/>
+		<key>Standard</key>
+		<string>SDS-10</string>
+		<key>StartupSound</key>
+		<true/>
+		<key>VersionAtStartup</key>
+		<true/>
+	</dict>
 </dict>
 </plist>
