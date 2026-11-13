@@ -764,6 +764,33 @@ static NSString * const kAppleFirmwarePage = @"https://support.apple.com/en-us/1
     go.target = self; go.action = @selector(closeWelcome:);
     [v addSubview:go];
 
+    // SDS-10 §10.2 version line at the foot of the sheet, runtime-read
+    // from this bundle's own Info.plist at presentation time — never
+    // hardcoded (CI stamps CFBundleVersion = apd-test-<run_number> at
+    // build time, so the parenthetical is that build's tag). Frame:
+    // the sheet is 440x340; the body label occupies y 50-106 and the
+    // Continue button y 18-50, so the only free band is the 18 pt
+    // margin below the button — the label sits at y 2, height 12
+    // (y 2-14, 4 pt clear of the button), full-width and centered
+    // like the title/byline/body above it.
+    NSDictionary *info = [[NSBundle mainBundle] infoDictionary];
+    NSString *shortVersion = info[@"CFBundleShortVersionString"];
+    NSString *buildVersion = info[@"CFBundleVersion"];
+    NSString *versionText;
+    if (shortVersion.length && buildVersion.length) {
+        versionText = [NSString stringWithFormat:@"Version %@ (%@)", shortVersion, buildVersion];
+    } else if (shortVersion.length) {
+        versionText = [NSString stringWithFormat:@"Version %@", shortVersion];
+    } else if (buildVersion.length) {
+        versionText = [NSString stringWithFormat:@"Version (%@)", buildVersion];
+    } else {
+        versionText = @"Version unknown";
+    }
+    NSTextField *version = [self labelAt:NSMakeRect(20, 2, 400, 12)
+        text:versionText size:10 bold:NO wrap:NO];
+    version.alignment = NSTextAlignmentCenter;
+    [v addSubview:version];
+
     // Startup sound from the Academy library (bundled byte-identical).
     NSString *soundPath = [[NSBundle mainBundle] pathForResource:@"startup-sound" ofType:@"wav"];
     if (soundPath) {
